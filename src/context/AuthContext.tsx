@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { UserProfile, UserRole } from '../types';
 import { DEMO_OFFICER } from '../lib/demoData';
 import { supabase, IS_DEMO_MODE } from '../lib/supabase';
+import { API_BASE_URL } from '../config/apiConfig';
 
 // ========================================================================
 // FASTAPI JWT HELPER — fetches a bearer token and stores it in localStorage
@@ -9,8 +10,7 @@ import { supabase, IS_DEMO_MODE } from '../lib/supabase';
 // ========================================================================
 async function fetchFastapiToken(username: string, password?: string): Promise<void> {
   try {
-    const apiBase = (import.meta.env?.VITE_API_BASE_URL || '').replace(/\/+$/, '') || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8000');
-    const res = await fetch(`${apiBase}/api/auth/login`, {
+    const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password: password || 'gov_session' }),

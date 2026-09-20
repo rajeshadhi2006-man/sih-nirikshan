@@ -99,31 +99,16 @@ export interface CCTVNetworkTestResponse {
 }
 
 
-export const getApiBaseUrl = (): string => {
-  const envApiBase = (import.meta.env?.VITE_API_BASE_URL || '').replace(/\/+$/, '');
-  if (envApiBase) return envApiBase;
-  if (typeof window !== 'undefined') {
-    return window.location.origin;
-  }
-  return 'http://localhost:8000';
-};
+import { API_BASE_URL, getApiBaseUrl, getWsBaseUrl } from '../config/apiConfig';
 
-export const API_BASE_URL = getApiBaseUrl();
+export { API_BASE_URL, getApiBaseUrl };
 
 export function getCCTVStreamUrl(cameraId = 'CCTV-01', key?: number | string): string {
   return key ? `${API_BASE_URL}/api/cctv/${cameraId}/stream?k=${key}` : `${API_BASE_URL}/api/cctv/${cameraId}/stream`;
 }
 
 export function getCCTVWebSocketUrl(cameraId = 'CCTV-01'): string {
-  const envApiBase = (import.meta.env?.VITE_API_BASE_URL || '').replace(/\/+$/, '');
-  if (envApiBase) {
-    return `${envApiBase.replace(/^http:\/\//, 'ws://').replace(/^https:\/\//, 'wss://')}/ws/cctv/${cameraId}`;
-  }
-  if (typeof window !== 'undefined') {
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${proto}//${window.location.host}/ws/cctv/${cameraId}`;
-  }
-  return `ws://localhost:8000/ws/cctv/${cameraId}`;
+  return getWsBaseUrl(`/ws/cctv/${cameraId}`);
 }
 
 export async function fetchNetworkInfo(): Promise<NetworkInfo> {

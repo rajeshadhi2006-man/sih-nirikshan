@@ -35,8 +35,7 @@ export interface Institution {
   email?: string;
   created_at: string;
 }
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8000');
+import { API_BASE_URL } from '../config/apiConfig';
 
 export async function fetchProjects(): Promise<DoSJEProject[]> {
   try {

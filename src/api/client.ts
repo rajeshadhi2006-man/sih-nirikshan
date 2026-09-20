@@ -1,19 +1,7 @@
 import axios from 'axios';
+import { API_BASE_URL, getApiBaseUrl } from '../config/apiConfig';
 
-const getApiBaseUrl = (): string => {
-  if (import.meta.env?.VITE_API_BASE_URL) {
-    return import.meta.env.VITE_API_BASE_URL;
-  }
-  if (import.meta.env?.VITE_API_URL) {
-    return import.meta.env.VITE_API_URL;
-  }
-  if (typeof window !== 'undefined') {
-    return window.location.origin;
-  }
-  return '';
-};
-
-export const API_BASE_URL = getApiBaseUrl();
+export { API_BASE_URL, getApiBaseUrl };
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,

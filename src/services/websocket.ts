@@ -2,18 +2,7 @@
 // REAL-TIME WEBSOCKET SERVICE WITH EXPONENTIAL BACKOFF
 // ========================================================================
 import { ConnectionState } from '../types/location';
-
-const getWsBaseUrl = (): string => {
-  const envApiBase = (import.meta.env?.VITE_API_BASE_URL || '').replace(/\/+$/, '');
-  if (envApiBase) {
-    return `${envApiBase.replace(/^http:\/\//, 'ws://').replace(/^https:\/\//, 'wss://')}/ws/live`;
-  }
-  if (typeof window !== 'undefined') {
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${proto}//${window.location.host}/ws/live`;
-  }
-  return 'ws://localhost:8000/ws/live';
-};
+import { getWsBaseUrl } from '../config/apiConfig';
 
 export type MessageHandler = (payload: { event: string; data?: any }) => void;
 export type StatusHandler = (status: ConnectionState, detail?: string) => void;

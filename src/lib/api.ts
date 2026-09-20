@@ -2,14 +2,10 @@
 // PYTHON FASTAPI & WEBSOCKET BACKEND CLIENT
 // ========================================================================
 
-const envApiBase = (import.meta.env?.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+import { API_BASE_URL, getWsBaseUrl } from '../config/apiConfig';
 
-export const API_BASE_URL = envApiBase || (typeof window !== 'undefined' ? window.location.origin : '');
-export const WS_URL = envApiBase
-  ? `${envApiBase.replace(/^http:\/\//, 'ws://').replace(/^https:\/\//, 'wss://')}/ws/live`
-  : (typeof window !== 'undefined'
-      ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/live`
-      : 'ws://localhost:8000/ws/live');
+export { API_BASE_URL };
+export const WS_URL = getWsBaseUrl('/ws/live');
 
 // Generic fetch wrapper with timeout & error handling
 async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {

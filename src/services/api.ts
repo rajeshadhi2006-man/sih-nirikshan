@@ -2,18 +2,9 @@
 // FASTAPI REST SERVICE CLIENT
 // ========================================================================
 import { LocationObject, UserLocation, CircularGeofence, AttendanceVerificationPayload } from '../types/location';
+import { API_BASE_URL, getApiBaseUrl } from '../config/apiConfig';
 
-const getApiBaseUrl = (): string => {
-  if (import.meta.env?.VITE_API_BASE_URL) {
-    return import.meta.env.VITE_API_BASE_URL.replace(/\/+$/, '');
-  }
-  if (typeof window !== 'undefined') {
-    return window.location.origin;
-  }
-  return 'http://localhost:8000';
-};
-
-export const API_BASE_URL = getApiBaseUrl();
+export { API_BASE_URL, getApiBaseUrl };
 
 async function safeFetch(urlOrPath: string, init?: RequestInit): Promise<Response> {
   const fullUrl = urlOrPath.startsWith('http') ? urlOrPath : `${API_BASE_URL}${urlOrPath}`;
@@ -30,15 +21,23 @@ async function safeFetch(urlOrPath: string, init?: RequestInit): Promise<Respons
 }
 
 async function handleResponse<T>(res: Response): Promise<T> {
+  const contentType = res.headers.get('content-type') || '';
   if (!res.ok) {
     let errorDetail = `HTTP ${res.status}`;
     try {
-      const jsonErr = await res.json();
-      errorDetail = jsonErr.detail || jsonErr.message || JSON.stringify(jsonErr);
+      if (contentType.includes('application/json')) {
+        const jsonErr = await res.json();
+        errorDetail = jsonErr.detail || jsonErr.message || JSON.stringify(jsonErr);
+      } else {
+        errorDetail = await res.text();
+      }
     } catch {
-      errorDetail = await res.text();
+      errorDetail = `HTTP ${res.status}`;
     }
     throw new Error(errorDetail);
+  }
+  if (!contentType.includes('application/json')) {
+    throw new Error(`Expected JSON response from backend, got ${contentType}`);
   }
   return res.json();
 }
