@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: sih-command-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: DATABASE_MODE
+        value: local
+      - key: SUPABASE_URL
+        value: https://ctmkpwwbdexwkakuqpat.supabase.co
+      - key: SUPABASE_KEY
+        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN0bWtwd3diZGV4d2tha3VxcGF0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2MDk4MDAsImV4cCI6MjEwNDE4NTgwMH0.ilxOvgsxXQoD3Rh6pZgmfiEMET5u3RtS-B0W_kOEhLU
+      - key: CORS_ORIGIN_REGEX
+        value: "https://.*(\\.pages\\.dev|\\.vercel\\.app)"
+      - key: JWT_SECRET
+        generateValue: true
