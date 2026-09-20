@@ -133,16 +133,37 @@ export const CCTV: React.FC = () => {
   const startBrowserCam = async () => {
     try {
       setBrowserCamError(null);
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
-        audio: false,
-      });
-      browserCamStreamRef.current = stream;
-      if (browserCamVideoRef.current) {
-        browserCamVideoRef.current.srcObject = stream;
-        await browserCamVideoRef.current.play().catch(() => {});
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+          audio: false,
+        });
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
       }
+
+      browserCamStreamRef.current = stream;
       setIsBrowserCamActive(true);
+      setCameraMode('LOCAL_WEBCAM');
+      setStreamError(false);
+
+      setTimeout(async () => {
+        if (browserCamVideoRef.current) {
+          browserCamVideoRef.current.srcObject = stream;
+          try {
+            await browserCamVideoRef.current.play();
+          } catch (e) {
+            console.warn('Video play error:', e);
+          }
+        }
+      }, 50);
+
+      const wsUrl = getCCTVWebSocketUrl(selectedCameraId);
+      const ws = new WebSocket(wsUrl);
 
       const canvas = document.createElement('canvas');
       canvas.width = 640;
@@ -150,24 +171,29 @@ export const CCTV: React.FC = () => {
       const ctx = canvas.getContext('2d');
 
       if (browserCamTimerRef.current) clearInterval(browserCamTimerRef.current);
-      browserCamTimerRef.current = setInterval(async () => {
-        if (!browserCamVideoRef.current || !ctx) return;
-        ctx.drawImage(browserCamVideoRef.current, 0, 0, canvas.width, canvas.height);
+      browserCamTimerRef.current = setInterval(() => {
+        const vid = browserCamVideoRef.current;
+        if (!vid || !ctx || vid.readyState < 2) return;
+        ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
         const b64 = canvas.toDataURL('image/jpeg', 0.6);
-        try {
-          await uploadCCTVFrame({
-            camera_id: selectedCameraId,
-            image: b64,
-            timestamp: new Date().toISOString()
-          });
-          setStreamKey(Date.now());
-        } catch (e) {
-          console.warn('Frame upload error:', e);
+
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(
+            JSON.stringify({
+              type: 'CCTV_FRAME',
+              data: {
+                camera_id: selectedCameraId,
+                image: b64,
+                timestamp: new Date().toISOString(),
+              },
+            })
+          );
         }
-      }, 120);
+      }, 150);
     } catch (err: any) {
       console.error('Camera access error:', err);
-      setBrowserCamError(err.message || 'Camera permission denied');
+      setBrowserCamError(err.message || 'Camera permission denied or camera not found on this device');
+      setIsBrowserCamActive(false);
     }
   };
 
@@ -1026,19 +1052,29 @@ export const CCTV: React.FC = () => {
                 : ''
             }`}
           >
-            {/* Real-Time MJPEG Stream with YOLO11 Bounding Boxes */}
-            <img
-              ref={streamImgRef}
-              src={getCCTVStreamUrl(selectedCameraId, streamKey)}
-              alt="Live YOLO11 CCTV Stream"
-              crossOrigin="anonymous"
-              className={`w-full h-full max-h-[460px] object-contain transition-transform ${
-                zoomLevel === 2 ? 'scale-125' : zoomLevel === 3 ? 'scale-150' : ''
-              }`}
-            />
-
-            {/* Hidden video element for local In-Browser Camera streaming */}
-            <video ref={browserCamVideoRef} autoPlay playsInline muted className="hidden" />
+            {/* If In-Browser Camera is Active, display the live local camera video directly */}
+            {isBrowserCamActive ? (
+              <video
+                ref={browserCamVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className={`w-full h-full max-h-[460px] object-contain transition-transform ${
+                  zoomLevel === 2 ? 'scale-125' : zoomLevel === 3 ? 'scale-150' : ''
+                }`}
+              />
+            ) : (
+              /* Real-Time MJPEG Stream with YOLO11 Bounding Boxes */
+              <img
+                ref={streamImgRef}
+                src={getCCTVStreamUrl(selectedCameraId, streamKey)}
+                alt="Live YOLO11 CCTV Stream"
+                crossOrigin="anonymous"
+                className={`w-full h-full max-h-[460px] object-contain transition-transform ${
+                  zoomLevel === 2 ? 'scale-125' : zoomLevel === 3 ? 'scale-150' : ''
+                }`}
+              />
+            )}
 
             {/* Offline Alert Placeholder (Section 16 Specification) */}
             {isOffline && !isBrowserCamActive && (
