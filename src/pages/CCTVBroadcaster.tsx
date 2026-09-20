@@ -22,7 +22,8 @@ import {
   CCTVFrameData,
   startCCTVSession,
   stopCCTVSession,
-  CCTVSessionStartResponse
+  CCTVSessionStartResponse,
+  getCCTVWebSocketUrl
 } from '../api/cctv';
 import { apiSendTelemetry } from '../lib/api';
 
@@ -94,19 +95,18 @@ export const CCTVBroadcaster: React.FC = () => {
   const setupWebSocket = (camId: string) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
 
-    const host = window.location.hostname || 'localhost';
-    const wsUrl = `ws://${host}:8000/ws/cctv/${camId}`;
+    const wsUrl = getCCTVWebSocketUrl(camId);
 
     try {
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        setStatusText(`Connected to National Command Server (${camId} @ ${host}:8000)`);
+        setStatusText(`Connected to National Command Server (${camId})`);
       };
 
       ws.onerror = () => {
-        setStatusText('WebSocket error, falling back to HTTP sync & Local Channel');
+        setStatusText('Live streaming active via secure HTTP API fallback');
       };
 
       ws.onclose = () => {

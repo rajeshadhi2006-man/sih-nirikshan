@@ -669,10 +669,10 @@ await supabase.from('location_updates').insert({
               Step 1: Open on Your Smartphone (Connected to Same Wi-Fi)
             </span>
             <div className="p-2 bg-slate-900 border border-slate-700 rounded text-amber-400 font-mono text-xs break-all select-all">
-              {window.location.protocol}//{window.location.hostname}:5173/transmitter
+              {window.location.origin}/transmitter
             </div>
             <p className="text-[11px] text-slate-400">
-              Or on mobile browser: <strong className="text-white">http://10.247.98.231:5173/transmitter</strong>
+              Open this link on any mobile phone browser to transmit live GPS!
             </p>
           </div>
 

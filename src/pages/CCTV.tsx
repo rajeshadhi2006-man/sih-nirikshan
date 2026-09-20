@@ -41,6 +41,7 @@ import {
   getCCTVWebSocketUrl,
   testCCTVConnection,
   networkTestCCTV,
+  uploadCCTVFrame,
   CCTVCamera,
   NetworkInfo,
   YOLOTelemetry,
@@ -121,6 +122,72 @@ export const CCTV: React.FC = () => {
   const wsRef = useRef<WebSocket | null>(null);
   const streamImgRef = useRef<HTMLImageElement | null>(null);
   const recordTimerRef = useRef<any>(null);
+
+  // In-Browser Camera Streaming (for Cloud & Vercel deployment)
+  const [isBrowserCamActive, setIsBrowserCamActive] = useState(false);
+  const [browserCamError, setBrowserCamError] = useState<string | null>(null);
+  const browserCamVideoRef = useRef<HTMLVideoElement | null>(null);
+  const browserCamStreamRef = useRef<MediaStream | null>(null);
+  const browserCamTimerRef = useRef<any>(null);
+
+  const startBrowserCam = async () => {
+    try {
+      setBrowserCamError(null);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+        audio: false,
+      });
+      browserCamStreamRef.current = stream;
+      if (browserCamVideoRef.current) {
+        browserCamVideoRef.current.srcObject = stream;
+        await browserCamVideoRef.current.play().catch(() => {});
+      }
+      setIsBrowserCamActive(true);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = 640;
+      canvas.height = 480;
+      const ctx = canvas.getContext('2d');
+
+      if (browserCamTimerRef.current) clearInterval(browserCamTimerRef.current);
+      browserCamTimerRef.current = setInterval(async () => {
+        if (!browserCamVideoRef.current || !ctx) return;
+        ctx.drawImage(browserCamVideoRef.current, 0, 0, canvas.width, canvas.height);
+        const b64 = canvas.toDataURL('image/jpeg', 0.6);
+        try {
+          await uploadCCTVFrame({
+            camera_id: selectedCameraId,
+            image: b64,
+            timestamp: new Date().toISOString()
+          });
+          setStreamKey(Date.now());
+        } catch (e) {
+          console.warn('Frame upload error:', e);
+        }
+      }, 120);
+    } catch (err: any) {
+      console.error('Camera access error:', err);
+      setBrowserCamError(err.message || 'Camera permission denied');
+    }
+  };
+
+  const stopBrowserCam = () => {
+    if (browserCamTimerRef.current) {
+      clearInterval(browserCamTimerRef.current);
+      browserCamTimerRef.current = null;
+    }
+    if (browserCamStreamRef.current) {
+      browserCamStreamRef.current.getTracks().forEach((t) => t.stop());
+      browserCamStreamRef.current = null;
+    }
+    setIsBrowserCamActive(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      stopBrowserCam();
+    };
+  }, []);
 
   // Test Connection Action
   const handleTestConnection = async () => {
@@ -496,21 +563,27 @@ export const CCTV: React.FC = () => {
           <div className="flex flex-col sm:flex-row sm:items-center gap-2">
             <span className="text-[11px] font-bold text-slate-400 uppercase">CAMERA SOURCE:</span>
             <div className="flex flex-wrap p-1 bg-slate-950 rounded-xl border border-slate-800 text-xs font-bold gap-1.5 shadow-inner">
-              {/* Option 1: Windows Phone Link */}
+              {/* Option: In-Browser Webcam (Instant Testing on Cloud & Local) */}
               <button
                 type="button"
-                onClick={() => handleSwitchSource('1')}
+                onClick={() => {
+                  if (isBrowserCamActive) {
+                    stopBrowserCam();
+                  } else {
+                    startBrowserCam();
+                  }
+                }}
                 className={`px-3.5 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
-                  customSourceUrl === '1'
-                    ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/40 ring-2 ring-emerald-400/60'
-                    : 'text-slate-400 hover:text-white bg-slate-900/80 hover:bg-slate-800'
+                  isBrowserCamActive
+                    ? 'bg-rose-600 text-white shadow-lg shadow-rose-900/40 ring-2 ring-rose-400/60 animate-pulse'
+                    : 'text-emerald-300 bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-500/30'
                 }`}
               >
-                <Smartphone className="w-3.5 h-3.5 text-emerald-300" />
-                <span>📱 Windows Phone Link (Cam 1)</span>
+                <Camera className="w-3.5 h-3.5 text-emerald-400" />
+                <span>{isBrowserCamActive ? '🛑 Stop In-Browser Cam' : '🎥 In-Browser Camera'}</span>
               </button>
 
-              {/* Option 2: Mobile Browser Phone Broadcaster */}
+              {/* Option 1: Mobile Browser Phone Broadcaster */}
               <button
                 type="button"
                 onClick={() => setIsQrModalOpen(true)}
@@ -518,6 +591,20 @@ export const CCTV: React.FC = () => {
               >
                 <QrCode className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
                 <span>📲 Scan Phone QR Link</span>
+              </button>
+
+              {/* Option 2: Windows Phone Link (Direct Local Only) */}
+              <button
+                type="button"
+                onClick={() => handleSwitchSource('1')}
+                className={`px-3.5 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
+                  customSourceUrl === '1'
+                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40 ring-2 ring-blue-400/60'
+                    : 'text-slate-400 hover:text-white bg-slate-900/80 hover:bg-slate-800'
+                }`}
+              >
+                <Smartphone className="w-3.5 h-3.5 text-blue-300" />
+                <span>📱 Phone Link (Local PC)</span>
               </button>
 
               {/* Option 3: IP Webcam / DroidCam */}
@@ -950,37 +1037,57 @@ export const CCTV: React.FC = () => {
               }`}
             />
 
+            {/* Hidden video element for local In-Browser Camera streaming */}
+            <video ref={browserCamVideoRef} autoPlay playsInline muted className="hidden" />
+
             {/* Offline Alert Placeholder (Section 16 Specification) */}
-            {isOffline && (
-              <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center space-y-3">
+            {isOffline && !isBrowserCamActive && (
+              <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center space-y-3 z-10">
                 <div className="p-3.5 bg-slate-900 border border-slate-800 rounded-2xl text-rose-400">
                   <AlertTriangle className="w-10 h-10 stroke-1 animate-pulse" />
                 </div>
                 <h4 className="text-base font-bold text-white uppercase font-mono tracking-wider">
-                  CAMERA OFFLINE
+                  CCTV STREAM WAITING FOR INPUT
                 </h4>
-                <p className="text-xs text-slate-400 max-w-sm">
-                  The live stream is currently disconnected. Ensure your phone camera app or RTSP stream is running and reachable.
+                <p className="text-xs text-slate-300 max-w-md">
+                  Cloud server is active and awaiting video frames. Choose an input source below to stream live video directly to YOLO11 AI:
                 </p>
-                <div className="text-[11px] font-mono text-slate-400 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
-                  Last frame received: {telemetry.last_frame ? telemetry.last_frame.replace('T', ' ').substring(0, 19) : '--'}
-                </div>
-                <div className="flex gap-2 pt-2">
+                
+                {browserCamError && (
+                  <div className="p-2 bg-rose-950/60 border border-rose-500/40 text-rose-300 text-xs rounded-lg">
+                    {browserCamError}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
                   <button
+                    type="button"
+                    onClick={startBrowserCam}
+                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-emerald-900/30 flex items-center gap-2"
+                  >
+                    <Camera className="w-4 h-4" />
+                    <span>🎥 Start In-Browser Camera</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsQrModalOpen(true)}
+                    className="px-4 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-cyan-900/30 flex items-center gap-2"
+                  >
+                    <QrCode className="w-4 h-4" />
+                    <span>📱 Connect Phone Camera</span>
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() => {
                       setStreamKey(Date.now());
                       loadData();
                     }}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition shadow flex items-center gap-1.5"
+                    className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold transition border border-slate-700 flex items-center gap-1.5"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
-                    <span>RETRY CONNECTION</span>
-                  </button>
-                  <button
-                    onClick={handleTestConnection}
-                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition border border-slate-700"
-                  >
-                    TEST CONNECTION
+                    <span>Retry</span>
                   </button>
                 </div>
               </div>
@@ -1294,13 +1401,20 @@ export const CCTV: React.FC = () => {
 
             {/* Method 1: Instant QR Code Scan (Zero App Install) */}
             {(() => {
-              // Compute the best usable IP:
-              // Prefer manualIp override → then networkInfo.local_ip → window.location.hostname
+              const isCloud = typeof window !== 'undefined' && (
+                window.location.protocol === 'https:' ||
+                window.location.hostname.includes('vercel.app') ||
+                window.location.hostname.includes('pages.dev') ||
+                window.location.hostname.includes('trycloudflare.com')
+              );
+              const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
               const rawIp = manualIp.trim() ||
                 networkInfo?.local_ip ||
                 (typeof window !== 'undefined' ? window.location.hostname : 'localhost');
-              const isLocalhost = rawIp === 'localhost' || rawIp === '127.0.0.1' || rawIp === '::1';
-              const broadcasterUrl = `http://${rawIp}:5173/cctv-broadcaster?cam=CCTV-01`;
+              const isLocalhost = !isCloud && (rawIp === 'localhost' || rawIp === '127.0.0.1' || rawIp === '::1');
+              const broadcasterUrl = isCloud
+                ? `${currentOrigin}/cctv-broadcaster?cam=CCTV-01`
+                : `http://${rawIp}:5173/cctv-broadcaster?cam=CCTV-01`;
 
               return (
                 <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 space-y-3">
@@ -1310,11 +1424,11 @@ export const CCTV: React.FC = () => {
                       <span>Method 1: Instant Phone Web Stream (QR Code)</span>
                     </span>
                     <span className="text-[10px] bg-emerald-950 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/30 font-bold">
-                      Recommended
+                      {isCloud ? 'Cloud Online' : 'Recommended'}
                     </span>
                   </div>
 
-                  {/* ⚠️ Warning if IP is localhost — phone can't reach it */}
+                  {/* Warning if IP is localhost on local dev */}
                   {isLocalhost && (
                     <div className="flex items-start gap-2 p-2.5 bg-amber-950/60 border border-amber-500/40 rounded-xl text-[11px] text-amber-300">
                       <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-400" />
@@ -1327,28 +1441,30 @@ export const CCTV: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Manual IP override field */}
-                  <div className="flex items-center gap-2">
-                    <label className="text-[10px] text-slate-400 font-bold uppercase shrink-0">PC LAN IP:</label>
-                    <input
-                      type="text"
-                      value={manualIp}
-                      onChange={e => setManualIp(e.target.value)}
-                      placeholder={networkInfo?.local_ip || '192.168.1.X'}
-                      className={`flex-1 bg-slate-900 border ${
-                        isLocalhost ? 'border-amber-500/60' : 'border-slate-700'
-                      } rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-600 outline-none focus:border-blue-500 transition font-mono`}
-                    />
-                    {manualIp && (
-                      <button
-                        onClick={() => setManualIp('')}
-                        className="text-slate-500 hover:text-white transition text-[10px] px-1.5"
-                        title="Reset to auto-detected IP"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
+                  {/* Manual IP override field (only shown on local development) */}
+                  {!isCloud && (
+                    <div className="flex items-center gap-2">
+                      <label className="text-[10px] text-slate-400 font-bold uppercase shrink-0">PC LAN IP:</label>
+                      <input
+                        type="text"
+                        value={manualIp}
+                        onChange={e => setManualIp(e.target.value)}
+                        placeholder={networkInfo?.local_ip || '192.168.1.X'}
+                        className={`flex-1 bg-slate-900 border ${
+                          isLocalhost ? 'border-amber-500/60' : 'border-slate-700'
+                        } rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-600 outline-none focus:border-blue-500 transition font-mono`}
+                      />
+                      {manualIp && (
+                        <button
+                          onClick={() => setManualIp('')}
+                          className="text-slate-500 hover:text-white transition text-[10px] px-1.5"
+                          title="Reset to auto-detected IP"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  )}
 
                   <div className="flex flex-col sm:flex-row items-center gap-4 pt-1">
                     {/* QR Code — regenerates live as IP changes */}
@@ -1365,9 +1481,19 @@ export const CCTV: React.FC = () => {
 
                     <div className="space-y-2.5 text-xs flex-1 w-full">
                       <p className="text-slate-300 text-[11px] leading-relaxed">
-                        1. Ensure your Phone and PC are on the <strong>same Wi-Fi / Hotspot</strong>.<br />
-                        2. Scan this QR Code with your Phone's Camera app.<br />
-                        3. Tap <strong className="text-emerald-400">"Start Broadcasting"</strong> to stream live to YOLO11!
+                        {isCloud ? (
+                          <>
+                            1. Open your Phone's Camera app (works over mobile data or Wi-Fi).<br />
+                            2. Scan this QR Code to open the Live Stream Broadcaster.<br />
+                            3. Tap <strong className="text-emerald-400">"Start Broadcasting"</strong> to stream directly to YOLO11!
+                          </>
+                        ) : (
+                          <>
+                            1. Ensure your Phone and PC are on the <strong>same Wi-Fi / Hotspot</strong>.<br />
+                            2. Scan this QR Code with your Phone's Camera app.<br />
+                            3. Tap <strong className="text-emerald-400">"Start Broadcasting"</strong> to stream live to YOLO11!
+                          </>
+                        )}
                       </p>
 
                       {/* Live link display */}
