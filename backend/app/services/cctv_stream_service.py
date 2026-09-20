@@ -229,13 +229,21 @@ class CCTVStreamManager:
         while self.is_running:
             try:
                 if self.cap is None or not self.cap.isOpened():
+                    # If frames were recently ingested from a phone or in-browser camera, stay LIVE
+                    if time.time() - getattr(self, "last_ingest_time", 0.0) < 6.0:
+                        self.status = "LIVE"
+                        time.sleep(0.5)
+                        continue
+
                     self.status = "CONNECTING"
                     self.cap = self._open_capture()
                     if self.cap is None or not self.cap.isOpened():
-                        self.status = "OFFLINE"
+                        if time.time() - getattr(self, "last_ingest_time", 0.0) < 6.0:
+                            self.status = "LIVE"
+                        else:
+                            self.status = "OFFLINE"
                         failed_connect_attempts += 1
-                        # Fast, responsive retry interval (1.0s) so the stream locks in immediately when phone is ready
-                        backoff = 1.0 if str(self.source_url).strip() == "1" else 0.8
+                        backoff = 2.0 if str(self.source_url).strip() in ("0", "1") else 1.0
                         time.sleep(backoff)
                         continue
                     failed_connect_attempts = 0
@@ -439,13 +447,13 @@ class CCTVStreamManager:
                     b'Content-Length: ' + str(len(frame_bytes)).encode('ascii') + b'\r\n\r\n' +
                     frame_bytes + b'\r\n'
                 )
-            elif not frame_bytes or self.status != "LIVE":
+            elif not frame_bytes or (self.status != "LIVE" and time.time() - getattr(self, "last_ingest_time", 0.0) >= 6.0):
                 blank = np.zeros((480, 640, 3), dtype=np.uint8)
                 msg = f"CCTV STREAM: {self.status}"
-                submsg = "Connecting to Windows Phone Link (Device 1)..." if self.status in ("CONNECTING", "OFFLINE") else ""
+                submsg = "Scan Phone QR or click 'In-Browser Camera' to stream live"
                 cv2.putText(blank, msg, (130, 230), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 165, 255), 2)
                 if submsg:
-                    cv2.putText(blank, submsg, (110, 270), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (140, 140, 140), 1)
+                    cv2.putText(blank, submsg, (40, 270), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (140, 140, 140), 1)
                 _, enc = cv2.imencode('.jpg', blank, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
                 raw = enc.tobytes()
                 yield (
@@ -467,6 +475,7 @@ class CCTVStreamManager:
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
             if frame is not None and frame.size > 0:
+                self.last_ingest_time = time.time()
                 self.status = "LIVE"
                 
                 # Update pipeline frame buffer
@@ -516,6 +525,7 @@ class CCTVStreamManager:
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
             if frame is not None and frame.size > 0:
+                self.last_ingest_time = time.time()
                 self.status = "LIVE"
                 
                 # Update pipeline frame buffer
