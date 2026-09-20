@@ -1,0 +1,13 @@
+backend/
+requirements.txt
+Dockerfile
+render.yaml
+*.py
+*.db
+*.pt
+*.onnx
+*.bat
+*.ps1
+*.vbs
+logs/
+.git/
