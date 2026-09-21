@@ -88,7 +88,7 @@ def _resolve_model_path() -> str:
     return env_path
 
 YOLO_MODEL_PATH = _resolve_model_path()
-YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", "0.35"))
+YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", "0.25"))
 YOLO_IMAGE_SIZE = int(os.getenv("YOLO_IMAGE_SIZE", "320"))
 YOLO_IOU_THRESHOLD = float(os.getenv("YOLO_IOU_THRESHOLD", "0.45"))
 CCTV_MAX_FPS = int(os.getenv("CCTV_MAX_FPS", "30"))

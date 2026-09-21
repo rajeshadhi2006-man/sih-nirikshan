@@ -20,11 +20,12 @@ class CCTVStreamManager:
         self.max_fps = max(1, min(60, max_fps))
         self.frame_skip = FRAME_SKIP
         self.camera_id = "CCTV-01"
+        self.flip_horizontal = False
 
         # Connection & Pipeline State
         self.is_running = False
         self.status = "CONNECTING"  # LIVE | CONNECTING | OFFLINE | ERROR
-        self.is_fallback = str(source_url).strip().isdigit()
+        self.is_fallback = (str(source_url).strip().lower() == "demo")
         self.last_frame_timestamp: Optional[str] = None
         self.last_error_message: Optional[str] = None
         self.cap: Optional[cv2.VideoCapture] = None
@@ -116,7 +117,7 @@ class CCTVStreamManager:
             self._last_switch_time = now
             print(f"[CCTV] Switching video source to: {cleaned}")
             self.source_url = cleaned
-            self.is_fallback = self.source_url.isdigit()
+            self.is_fallback = (cleaned.lower() == "demo")
             self.status = "CONNECTING"
             if self.cap:
                 try:
@@ -124,6 +125,11 @@ class CCTVStreamManager:
                 except Exception:
                     pass
                 self.cap = None
+
+    def set_flip_horizontal(self, flip: bool):
+        """Toggles or sets horizontal mirror flip on camera frames."""
+        self.flip_horizontal = bool(flip)
+        print(f"[CCTV] Horizontal mirror reflection set to: {self.flip_horizontal}")
 
     def _safe_open_device(self, dev_idx: int, timeout_sec: Optional[float] = None) -> Optional[cv2.VideoCapture]:
         """Safely and rapidly opens a local camera index without DirectShow graph rebuilding."""
@@ -194,6 +200,14 @@ class CCTVStreamManager:
             cap = self._safe_open_device(target)
             if cap:
                 print(f"[CCTV] Successfully locked to Device Index {target} (30 FPS)")
+                return cap
+
+            # Auto-fallback to other available local camera index if requested index didn't open
+            alternate = 0 if target == 1 else 1
+            cap = self._safe_open_device(alternate, timeout_sec=2.0)
+            if cap:
+                print(f"[CCTV] Device {target} not available, successfully opened fallback Device {alternate}")
+                self.source_url = str(alternate)
                 return cap
 
             if target == 1:
@@ -315,10 +329,10 @@ class CCTVStreamManager:
                         time.sleep(0.05)
                         continue
 
-                    # If hardware camera index (0 or 1) cannot be opened (cloud/Docker containers or headless machines):
-                    # Fall back to high-fidelity AI-simulated CCTV facility stream so the system is 100% active 24/7!
-                    if str(self.source_url).strip() in ("0", "1", "demo") or failed_connect_attempts >= 1:
+                    # If demo mode is explicitly requested:
+                    if str(self.source_url).strip().lower() == "demo":
                         self.status = "LIVE"
+                        self.is_fallback = True
                         sim_frame, sim_dets = self._generate_simulated_security_frame()
                         with self.frame_lock:
                             self.latest_raw_frame = sim_frame
@@ -353,12 +367,57 @@ class CCTVStreamManager:
                         time.sleep(0.033)
                         continue
 
+                    # Attempt opening real hardware or network stream
                     self.status = "CONNECTING"
                     self.cap = self._open_capture()
                     if self.cap is None or not self.cap.isOpened():
                         failed_connect_attempts += 1
-                        time.sleep(1.0)
+                        # If hardware camera cannot be opened after attempts (e.g. headless cloud or no webcam):
+                        if failed_connect_attempts >= 3:
+                            self.status = "LIVE"
+                            self.is_fallback = True
+                            sim_frame, sim_dets = self._generate_simulated_security_frame()
+                            with self.frame_lock:
+                                self.latest_raw_frame = sim_frame
+                                self.frame_seq += 1
+                            with self.lock:
+                                self.cached_detections = sim_dets["detections"]
+                                self.cached_counts = sim_dets["counts"]
+                                ts_now = datetime.now(timezone.utc).isoformat()
+                                self.latest_detection_data = {
+                                    "camera_id": self.camera_id,
+                                    "timestamp": ts_now,
+                                    "status": "LIVE",
+                                    "connected": True,
+                                    "is_fallback": True,
+                                    "source": "Facility Perimeter (AI Live Node)",
+                                    "last_frame": ts_now,
+                                    "fps": 30.0,
+                                    "yolo_fps": 30.0,
+                                    "inference_latency_ms": 11.2,
+                                    "device": yolo_service.device,
+                                    "detections": sim_dets["detections"],
+                                    "counts": sim_dets["counts"]
+                                }
+
+                            annotated_frame = yolo_service.draw_detections_on_frame(sim_frame, sim_dets["detections"], in_place=False)
+                            ret_enc, jpeg_buf = cv2.imencode('.jpg', annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
+                            if ret_enc:
+                                with self.lock:
+                                    self.latest_jpeg_bytes = jpeg_buf.tobytes()
+                                self.new_frame_event.set()
+
+                            time.sleep(0.033)
+                            # Periodically retry hardware connection every ~5 seconds
+                            if failed_connect_attempts > 150:
+                                failed_connect_attempts = 0
+                            continue
+
+                        time.sleep(0.5)
                         continue
+
+                    # Real camera successfully connected!
+                    self.is_fallback = False
                     failed_connect_attempts = 0
                     consecutive_read_failures = 0
 
@@ -391,6 +450,9 @@ class CCTVStreamManager:
                 self.status = "LIVE"
                 self.last_frame_timestamp = datetime.utcnow().isoformat() + "Z"
                 self.frame_count += 1
+
+                if self.flip_horizontal:
+                    frame = cv2.flip(frame, 1)
 
                 # Update latest raw frame in atomic single-item buffer (Producer)
                 with self.frame_lock:
@@ -461,6 +523,11 @@ class CCTVStreamManager:
                     continue
 
                 self.last_processed_seq = seq_to_process
+
+                # If running on simulated fallback frames, do not wipe counts with YOLO on stick figures
+                if self.is_fallback:
+                    time.sleep(0.03)
+                    continue
 
                 # Run ultra-fast YOLO11 detection and tracking
                 detections, counts = yolo_service.detect_only(frame_to_process)
@@ -544,13 +611,10 @@ class CCTVStreamManager:
         boundary = b'--frame\r\n'
         last_sent_seq = -1
         while self.is_running:
-            # Wait for next frame event with low-latency timeout
-            self.new_frame_event.wait(timeout=0.033)
-            self.new_frame_event.clear()
-
             with self.lock:
                 frame_bytes = self.latest_jpeg_bytes
                 seq = self.frame_seq
+                is_live = (self.status == "LIVE")
 
             if frame_bytes and seq != last_sent_seq:
                 last_sent_seq = seq
@@ -560,7 +624,8 @@ class CCTVStreamManager:
                     b'Content-Length: ' + str(len(frame_bytes)).encode('ascii') + b'\r\n\r\n' +
                     frame_bytes + b'\r\n'
                 )
-            elif not frame_bytes or (self.status != "LIVE" and time.time() - getattr(self, "last_ingest_time", 0.0) >= 6.0):
+                time.sleep(0.02)
+            elif not is_live and (time.time() - getattr(self, "last_ingest_time", 0.0) >= 6.0):
                 blank = np.zeros((480, 640, 3), dtype=np.uint8)
                 msg = f"CCTV STREAM: {self.status}"
                 submsg = "Scan Phone QR or click 'In-Browser Camera' to stream live"
@@ -575,7 +640,9 @@ class CCTVStreamManager:
                     b'Content-Length: ' + str(len(raw)).encode('ascii') + b'\r\n\r\n' +
                     raw + b'\r\n'
                 )
-                time.sleep(0.04)
+                time.sleep(0.1)
+            else:
+                time.sleep(0.015)
 
     def ingest_frame_base64(self, b64_data: str) -> Dict[str, Any]:
         """Ingests a base64 encoded frame from a mobile phone browser, runs YOLO11, and updates stream."""
@@ -588,8 +655,11 @@ class CCTVStreamManager:
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
             if frame is not None and frame.size > 0:
+                if self.flip_horizontal:
+                    frame = cv2.flip(frame, 1)
                 self.last_ingest_time = time.time()
                 self.status = "LIVE"
+                self.is_fallback = False
                 
                 # Update pipeline frame buffer
                 with self.frame_lock:
@@ -609,6 +679,10 @@ class CCTVStreamManager:
                     "camera_id": self.camera_id,
                     "timestamp": timestamp_str,
                     "status": "LIVE",
+                    "connected": True,
+                    "is_fallback": False,
+                    "source": "In-Browser / Mobile Stream",
+                    "last_frame": timestamp_str,
                     "fps": 30.0,
                     "yolo_fps": self.yolo_fps or 15.0,
                     "inference_latency_ms": yolo_service.last_inference_latency_ms,
@@ -638,8 +712,11 @@ class CCTVStreamManager:
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
             if frame is not None and frame.size > 0:
+                if self.flip_horizontal:
+                    frame = cv2.flip(frame, 1)
                 self.last_ingest_time = time.time()
                 self.status = "LIVE"
+                self.is_fallback = False
                 
                 # Update pipeline frame buffer
                 with self.frame_lock:
@@ -659,6 +736,10 @@ class CCTVStreamManager:
                     "camera_id": self.camera_id,
                     "timestamp": timestamp_str,
                     "status": "LIVE",
+                    "connected": True,
+                    "is_fallback": False,
+                    "source": "Flutter Mobile Camera",
+                    "last_frame": timestamp_str,
                     "fps": 30.0,
                     "yolo_fps": self.yolo_fps or 15.0,
                     "inference_latency_ms": yolo_service.last_inference_latency_ms,

@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: sih-backend
+    restart: always
+    environment:
+      - PORT=8000
+      - HOST=0.0.0.0
+      - DATABASE_MODE=local
+      - DATABASE_URL=sqlite:///./backend/sih_database.db
+      - DATABASE_PATH=/app/backend/sih_database.db
+      - YOLO_MODEL_PATH=/app/backend/yolo11n.pt
+      - YOLO_CONFIDENCE=0.25
+      - YOLO_IMAGE_SIZE=320
+      - CCTV_SOURCE_URL=demo
+      - CCTV_MAX_FPS=30
+      - JWT_SECRET=sih-national-command-secret-key-998877
+    volumes:
+      - cctv_data:/app/backend/data
+      - cctv_db:/app/backend/db
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/oracle/Dockerfile.frontend
+    container_name: sih-frontend
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  cctv_data:
+  cctv_db:

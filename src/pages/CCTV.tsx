@@ -29,7 +29,8 @@ import {
   Clock,
   Cpu,
   QrCode,
-  ExternalLink
+  ExternalLink,
+  FlipHorizontal
 } from 'lucide-react';
 import {
   fetchCCTVPercentCameras,
@@ -47,7 +48,8 @@ import {
   YOLOTelemetry,
   CCTVConfig,
   CCTVTestResponse,
-  CCTVNetworkTestResponse
+  CCTVNetworkTestResponse,
+  toggleCCTVFlip
 } from '../api/cctv';
 import { fetchProjects, DoSJEProject } from '../api/projects';
 
@@ -78,7 +80,7 @@ export const CCTV: React.FC = () => {
     status: 'CONNECTING',
     fps: 0,
     model_name: 'YOLO11n',
-    confidence: 0.35,
+    confidence: 0.25,
     imgsz: 640,
     max_fps: 25
   });
@@ -106,8 +108,28 @@ export const CCTV: React.FC = () => {
   // Tactical Controls
   const [visionFilter, setVisionFilter] = useState<'normal' | 'night' | 'thermal' | 'ir'>('normal');
   const [zoomLevel, setZoomLevel] = useState<number>(1);
+  const [isMirrored, setIsMirrored] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('cctv_mirror_mode') === 'true';
+    }
+    return false;
+  });
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+
+  const handleToggleMirror = async () => {
+    const nextState = !isMirrored;
+    setIsMirrored(nextState);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('cctv_mirror_mode', String(nextState));
+    }
+    try {
+      await toggleCCTVFlip(nextState);
+      setStreamKey(Date.now());
+    } catch (e) {
+      console.warn('Failed to toggle backend mirror flip:', e);
+    }
+  };
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
@@ -263,18 +285,25 @@ export const CCTV: React.FC = () => {
 
       setCameras(cList);
       setProjects(pList);
-      const savedSource = (typeof window !== 'undefined' && localStorage.getItem('cctv_selected_source')) || cfg?.source_url || '1';
-      setCustomSourceUrl(savedSource);
-      if (savedSource === '1') {
-        setCameraMode('PHONE_STREAM');
-      } else if (savedSource === '0') {
+      // Prioritize the backend's active running source URL
+      const activeSource = cfg?.source_url || (typeof window !== 'undefined' && localStorage.getItem('cctv_selected_source')) || '0';
+      setCustomSourceUrl(activeSource);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('cctv_selected_source', activeSource);
+      }
+      if (activeSource === '0') {
         setCameraMode('LOCAL_WEBCAM');
+      } else if (activeSource === '1') {
+        setCameraMode('PHONE_STREAM');
       } else {
         setCameraMode('PHONE_STREAM');
       }
 
       if (cfg) {
         setCctvConfig(cfg);
+        if (cfg.flip_horizontal !== undefined) {
+          setIsMirrored(Boolean(cfg.flip_horizontal));
+        }
       }
       if (netInfo) {
         setNetworkInfo(netInfo);
@@ -923,7 +952,7 @@ export const CCTV: React.FC = () => {
             <span className="text-[11px] font-bold text-emerald-400 uppercase">Persons Detected</span>
             <Users className="w-4 h-4 text-emerald-400" />
           </div>
-          <div className="mt-1 text-2xl font-black text-emerald-400 font-mono">{telemetry.counts.person}</div>
+          <div className="mt-1 text-2xl font-black text-emerald-400 font-mono">{telemetry.counts?.person ?? 0}</div>
           <span className="text-[10px] text-slate-500 font-mono">Real-time Person Counter</span>
         </div>
 
@@ -932,7 +961,7 @@ export const CCTV: React.FC = () => {
             <span className="text-[11px] font-bold text-cyan-400 uppercase">Vehicles Detected</span>
             <Car className="w-4 h-4 text-cyan-400" />
           </div>
-          <div className="mt-1 text-2xl font-black text-cyan-400 font-mono">{telemetry.counts.vehicle}</div>
+          <div className="mt-1 text-2xl font-black text-cyan-400 font-mono">{telemetry.counts?.vehicle ?? 0}</div>
           <span className="text-[10px] text-slate-500 font-mono">Cars, Trucks, Bikes</span>
         </div>
 
@@ -1003,8 +1032,24 @@ export const CCTV: React.FC = () => {
             </div>
 
 
-            {/* Tactical Vision Filter Mode Toggles */}
-            <div className="flex items-center gap-1.5 bg-slate-900 p-1 rounded-xl border border-slate-800 text-[11px] font-bold">
+            <div className="flex items-center gap-2">
+              {/* Mirror Reflection Mode Toggle Button */}
+              <button
+                type="button"
+                onClick={handleToggleMirror}
+                title={isMirrored ? "Mirror Reflection is ACTIVE — Click to switch to Normal (Not Mirrored)" : "Normal (Not Mirrored) — Click to switch to Mirror Reflection"}
+                className={`px-3 py-1.5 rounded-xl text-[11px] font-bold transition flex items-center gap-1.5 border shadow-sm ${
+                  isMirrored
+                    ? 'bg-amber-600 text-white border-amber-400/80 shadow-amber-900/40 ring-1 ring-amber-400 animate-pulse'
+                    : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-700'
+                }`}
+              >
+                <FlipHorizontal className="w-3.5 h-3.5 text-cyan-400" />
+                <span>{isMirrored ? '🪞 Mirrored' : '📐 Normal (Not Mirrored)'}</span>
+              </button>
+
+              {/* Tactical Vision Filter Mode Toggles */}
+              <div className="flex items-center gap-1.5 bg-slate-900 p-1 rounded-xl border border-slate-800 text-[11px] font-bold">
               <button
                 onClick={() => setVisionFilter('normal')}
                 className={`px-2.5 py-1 rounded-lg transition ${
@@ -1039,6 +1084,7 @@ export const CCTV: React.FC = () => {
               </button>
             </div>
           </div>
+        </div>
 
           {/* Actual Live Video Viewport */}
           <div
@@ -1060,6 +1106,8 @@ export const CCTV: React.FC = () => {
                 playsInline
                 muted
                 className={`w-full h-full max-h-[460px] object-contain transition-transform ${
+                  isMirrored ? '-scale-x-100' : ''
+                } ${
                   zoomLevel === 2 ? 'scale-125' : zoomLevel === 3 ? 'scale-150' : ''
                 }`}
               />
@@ -1069,7 +1117,6 @@ export const CCTV: React.FC = () => {
                 ref={streamImgRef}
                 src={getCCTVStreamUrl(selectedCameraId, streamKey)}
                 alt="Live YOLO11 CCTV Stream"
-                crossOrigin="anonymous"
                 className={`w-full h-full max-h-[460px] object-contain transition-transform ${
                   zoomLevel === 2 ? 'scale-125' : zoomLevel === 3 ? 'scale-150' : ''
                 }`}
@@ -1148,7 +1195,7 @@ export const CCTV: React.FC = () => {
                   <div className="bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10 text-right space-y-0.5">
                     <span className="text-cyan-400 block font-bold">FPS: {telemetry.fps || 24}</span>
                     <span className="text-slate-300 text-[10px]">
-                      Objects: {telemetry.counts.total}
+                      Objects: {telemetry.counts?.total ?? 0}
                     </span>
                   </div>
                 </div>
@@ -1260,17 +1307,17 @@ export const CCTV: React.FC = () => {
 
               <div className="flex justify-between items-center p-2 bg-slate-950 rounded-xl border border-slate-800/80">
                 <span className="text-slate-400 font-sans font-medium">PERSONS</span>
-                <span className="text-emerald-400 font-bold">{telemetry.counts.person}</span>
+                <span className="text-emerald-400 font-bold">{telemetry.counts?.person ?? 0}</span>
               </div>
 
               <div className="flex justify-between items-center p-2 bg-slate-950 rounded-xl border border-slate-800/80">
                 <span className="text-slate-400 font-sans font-medium">VEHICLES</span>
-                <span className="text-cyan-400 font-bold">{telemetry.counts.vehicle}</span>
+                <span className="text-cyan-400 font-bold">{telemetry.counts?.vehicle ?? 0}</span>
               </div>
 
               <div className="flex justify-between items-center p-2 bg-slate-950 rounded-xl border border-slate-800/80">
                 <span className="text-slate-400 font-sans font-medium">TOTAL OBJECTS</span>
-                <span className="text-amber-400 font-bold">{telemetry.counts.total}</span>
+                <span className="text-amber-400 font-bold">{telemetry.counts?.total ?? 0}</span>
               </div>
 
               <div className="flex justify-between items-center p-2 bg-slate-950 rounded-xl border border-slate-800/80 text-[11px]">

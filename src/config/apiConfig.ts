@@ -13,16 +13,25 @@ export const CLOUD_BACKEND_URL = 'https://sih-nirikshan-o5rn.onrender.com';
  * 3. In cloud production (Cloudflare Pages, Vercel, or any custom domain) -> CLOUD_BACKEND_URL
  */
 export const getApiBaseUrl = (): string => {
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    const isLocal =
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '::1' ||
+      host.startsWith('192.168.') ||
+      host.startsWith('10.') ||
+      host.startsWith('172.') ||
+      host.endsWith('.local');
+
+    if (isLocal) {
+      return `http://${host === 'localhost' ? 'localhost' : host}:8000`;
+    }
+  }
+
   const envUrl = (import.meta.env?.VITE_API_BASE_URL || import.meta.env?.VITE_API_URL || '').trim().replace(/\/+$/, '');
   if (envUrl) {
     return envUrl;
-  }
-
-  if (typeof window !== 'undefined') {
-    const host = window.location.hostname;
-    if (host === 'localhost' || host === '127.0.0.1') {
-      return 'http://localhost:8000';
-    }
   }
 
   return CLOUD_BACKEND_URL;

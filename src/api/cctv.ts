@@ -76,6 +76,7 @@ export interface CCTVConfig {
   confidence: number;
   imgsz: number;
   max_fps: number;
+  flip_horizontal?: boolean;
 }
 
 export interface CCTVTestResponse {
@@ -145,6 +146,7 @@ export async function updateCCTVConfig(payload: {
   confidence?: number;
   max_fps?: number;
   imgsz?: number;
+  flip_horizontal?: boolean;
 }): Promise<boolean> {
   try {
     await axios.post(`${API_BASE_URL}/api/cctv/config`, payload);
@@ -152,6 +154,17 @@ export async function updateCCTVConfig(payload: {
   } catch (e) {
     console.warn('Error updating CCTV config:', e);
     return false;
+  }
+}
+
+export async function toggleCCTVFlip(flip?: boolean): Promise<{ success: boolean; flip_horizontal: boolean }> {
+  try {
+    const url = flip !== undefined ? `${API_BASE_URL}/api/cctv/flip?flip=${flip}` : `${API_BASE_URL}/api/cctv/flip`;
+    const res = await axios.post(url);
+    return res.data;
+  } catch (e) {
+    console.warn('Error toggling CCTV flip:', e);
+    return { success: false, flip_horizontal: false };
   }
 }
 

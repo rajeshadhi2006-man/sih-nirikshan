@@ -56,6 +56,7 @@ class CCTVConfigUpdateRequest(BaseModel):
     max_fps: Optional[int] = None
     imgsz: Optional[int] = None
     iou: Optional[float] = None
+    flip_horizontal: Optional[bool] = None
 
 class CCTVTestRequest(BaseModel):
     source_url: Optional[str] = None
@@ -194,7 +195,8 @@ def get_cctv_config():
         "iou": yolo_service.iou,
         "imgsz": yolo_service.imgsz,
         "max_fps": cctv_stream_manager.max_fps,
-        "inference_latency_ms": yolo_service.last_inference_latency_ms
+        "inference_latency_ms": yolo_service.last_inference_latency_ms,
+        "flip_horizontal": cctv_stream_manager.flip_horizontal
     }
 
 @router.post("/config")
@@ -215,11 +217,24 @@ def update_cctv_config(req: CCTVConfigUpdateRequest):
     if req.imgsz is not None and req.imgsz in [320, 384, 416, 480, 640, 1280]:
         yolo_service.imgsz = int(req.imgsz)
 
+    if req.flip_horizontal is not None:
+        cctv_stream_manager.set_flip_horizontal(req.flip_horizontal)
+
     return {
         "success": True,
         "message": "CCTV configuration updated",
         "config": get_cctv_config()
     }
+
+@router.post("/flip")
+def toggle_or_set_flip(flip: Optional[bool] = None):
+    """Toggles or explicitly sets horizontal mirror reflection for the CCTV stream."""
+    if flip is None:
+        new_state = not cctv_stream_manager.flip_horizontal
+    else:
+        new_state = bool(flip)
+    cctv_stream_manager.set_flip_horizontal(new_state)
+    return {"success": True, "flip_horizontal": cctv_stream_manager.flip_horizontal}
 
 @router.get("/status")
 def get_cctv_status():
@@ -231,12 +246,22 @@ def get_camera_status(camera_id: str):
     """Returns status and detection counts for a specific camera channel."""
     return cctv_stream_manager.get_latest_data()
 
+STREAM_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "*",
+}
+
 @router.get("/stream")
 def get_default_mjpeg_stream():
     """Real-time multipart MJPEG stream with YOLO11 bounding boxes."""
     return StreamingResponse(
         cctv_stream_manager.generate_mjpeg_stream(),
-        media_type="multipart/x-mixed-replace; boundary=frame"
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers=STREAM_HEADERS
     )
 
 @router.get("/{camera_id}/stream")
@@ -244,7 +269,8 @@ def get_camera_mjpeg_stream(camera_id: str):
     """Real-time multipart MJPEG stream for a specific camera channel."""
     return StreamingResponse(
         cctv_stream_manager.generate_mjpeg_stream(),
-        media_type="multipart/x-mixed-replace; boundary=frame"
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers=STREAM_HEADERS
     )
 
 class CCTVFrameUpload(BaseModel):
