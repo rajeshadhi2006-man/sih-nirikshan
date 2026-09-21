@@ -156,6 +156,13 @@ def _extract_512d_feature_vector(image_bytes: bytes) -> List[float]:
             pil_img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
             img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
+        # Fast downscale for high-resolution phone camera photos to prevent blocking CPU & freezing server
+        if img is not None:
+            max_dim = max(img.shape[0], img.shape[1])
+            if max_dim > 720:
+                scale = 720.0 / max_dim
+                img = cv2.resize(img, (int(img.shape[1] * scale), int(img.shape[0] * scale)), interpolation=cv2.INTER_AREA)
+
         # 1. Crop face bounding region
         face_crop = _crop_face(img)
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Video,
   Camera,
@@ -145,12 +145,92 @@ export const CCTV: React.FC = () => {
   const streamImgRef = useRef<HTMLImageElement | null>(null);
   const recordTimerRef = useRef<any>(null);
 
-  // In-Browser Camera Streaming (for Cloud & Vercel deployment)
+  // In-Browser Camera Streaming with Real-Time YOLO11 Overlay
   const [isBrowserCamActive, setIsBrowserCamActive] = useState(false);
   const [browserCamError, setBrowserCamError] = useState<string | null>(null);
   const browserCamVideoRef = useRef<HTMLVideoElement | null>(null);
+  const browserCamOverlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const browserCamStreamRef = useRef<MediaStream | null>(null);
   const browserCamTimerRef = useRef<any>(null);
+
+  // Draws high-tech YOLO11 bounding boxes directly on the overlay canvas
+  const drawDetectionsOverlay = useCallback((detections: any[], videoEl: HTMLVideoElement | null, canvasEl: HTMLCanvasElement | null) => {
+    if (!canvasEl || !videoEl) return;
+    const ctx = canvasEl.getContext('2d');
+    if (!ctx) return;
+
+    const width = videoEl.clientWidth || canvasEl.clientWidth || 640;
+    const height = videoEl.clientHeight || canvasEl.clientHeight || 480;
+
+    if (canvasEl.width !== width || canvasEl.height !== height) {
+      canvasEl.width = width;
+      canvasEl.height = height;
+    }
+
+    ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+
+    if (!detections || detections.length === 0) return;
+
+    // The frames sent to YOLO11 inference are 640x480
+    const scaleX = width / 640;
+    const scaleY = height / 480;
+
+    for (const det of detections) {
+      const bbox = det.bbox;
+      if (!bbox) continue;
+
+      const x1 = (bbox.x1 ?? 0) * scaleX;
+      const y1 = (bbox.y1 ?? 0) * scaleY;
+      const x2 = (bbox.x2 ?? 0) * scaleX;
+      const y2 = (bbox.y2 ?? 0) * scaleY;
+      const w = Math.max(0, x2 - x1);
+      const h = Math.max(0, y2 - y1);
+
+      const isPerson = det.class === 'person';
+      const color = isPerson ? '#10B981' : '#06B6D4'; // Emerald for person, Cyan for other
+      const bgColor = isPerson ? 'rgba(16, 185, 129, 0.2)' : 'rgba(6, 182, 212, 0.2)';
+
+      // 1. Semi-transparent box fill
+      ctx.fillStyle = bgColor;
+      ctx.fillRect(x1, y1, w, h);
+
+      // 2. Main Box Stroke with outer glow
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2.5;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 8;
+      ctx.strokeRect(x1, y1, w, h);
+      ctx.shadowBlur = 0;
+
+      // 3. Tactical Corner Brackets
+      const cornerLen = Math.min(16, Math.max(6, w / 4), Math.max(6, h / 4));
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      // Top-Left
+      ctx.moveTo(x1, y1 + cornerLen); ctx.lineTo(x1, y1); ctx.lineTo(x1 + cornerLen, y1);
+      // Top-Right
+      ctx.moveTo(x2 - cornerLen, y1); ctx.lineTo(x2, y1); ctx.lineTo(x2, y1 + cornerLen);
+      // Bottom-Left
+      ctx.moveTo(x1, y2 - cornerLen); ctx.lineTo(x1, y2); ctx.lineTo(x1 + cornerLen, y2);
+      // Bottom-Right
+      ctx.moveTo(x2 - cornerLen, y2); ctx.lineTo(x2, y2); ctx.lineTo(x2, y2 - cornerLen);
+      ctx.stroke();
+
+      // 4. Tactical HUD Badge Tag: "PERSON #1 • 94%"
+      const labelText = `${isPerson ? 'PERSON' : det.class.toUpperCase()} ${det.track_id ? `#${det.track_id}` : ''} • ${Math.round((det.confidence || 0) * 100)}%`;
+      ctx.font = 'bold 11px Inter, system-ui, sans-serif';
+      const textMetrics = ctx.measureText(labelText);
+      const badgeWidth = textMetrics.width + 12;
+      const badgeHeight = 18;
+      const badgeY = Math.max(0, y1 - badgeHeight);
+
+      ctx.fillStyle = color;
+      ctx.fillRect(x1, badgeY, badgeWidth, badgeHeight);
+
+      ctx.fillStyle = '#0F172A';
+      ctx.fillText(labelText, x1 + 6, badgeY + 13);
+    }
+  }, []);
 
   const startBrowserCam = async () => {
     try {
@@ -184,34 +264,67 @@ export const CCTV: React.FC = () => {
         }
       }, 50);
 
-      const wsUrl = getCCTVWebSocketUrl(selectedCameraId);
-      const ws = new WebSocket(wsUrl);
-
       const canvas = document.createElement('canvas');
       canvas.width = 640;
       canvas.height = 480;
       const ctx = canvas.getContext('2d');
 
+      let frameCounter = 0;
+      let isUploadingHttp = false;
+
       if (browserCamTimerRef.current) clearInterval(browserCamTimerRef.current);
-      browserCamTimerRef.current = setInterval(() => {
+      browserCamTimerRef.current = setInterval(async () => {
         const vid = browserCamVideoRef.current;
         if (!vid || !ctx || vid.readyState < 2) return;
         ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
-        const b64 = canvas.toDataURL('image/jpeg', 0.6);
+        const b64 = canvas.toDataURL('image/jpeg', 0.65);
+        frameCounter++;
 
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(
-            JSON.stringify({
-              type: 'CCTV_FRAME',
-              data: {
-                camera_id: selectedCameraId,
-                image: b64,
-                timestamp: new Date().toISOString(),
-              },
-            })
-          );
+        // 1. Send via primary WebSocket if connected
+        let sentViaWs = false;
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          try {
+            wsRef.current.send(
+              JSON.stringify({
+                type: 'CCTV_FRAME',
+                data: {
+                  camera_id: selectedCameraId,
+                  image: b64,
+                  timestamp: new Date().toISOString(),
+                },
+              })
+            );
+            sentViaWs = true;
+          } catch {}
         }
-      }, 150);
+
+        // 2. Continuous HTTP frame upload fallback: guarantees YOLO11 runs and returns detections immediately
+        if ((!sentViaWs || frameCounter % 3 === 0) && !isUploadingHttp) {
+          isUploadingHttp = true;
+          try {
+            const res = await uploadCCTVFrame({
+              camera_id: selectedCameraId,
+              image: b64,
+            });
+            if (res && res.detections) {
+              setTelemetry((prev) => ({
+                ...prev,
+                ...res,
+                status: 'LIVE',
+              }));
+              drawDetectionsOverlay(
+                res.detections,
+                browserCamVideoRef.current,
+                browserCamOverlayCanvasRef.current
+              );
+            }
+          } catch (e) {
+            console.warn('HTTP frame upload error:', e);
+          } finally {
+            isUploadingHttp = false;
+          }
+        }
+      }, 120);
     } catch (err: any) {
       console.error('Camera access error:', err);
       setBrowserCamError(err.message || 'Camera permission denied or camera not found on this device');
@@ -228,6 +341,10 @@ export const CCTV: React.FC = () => {
       browserCamStreamRef.current.getTracks().forEach((t) => t.stop());
       browserCamStreamRef.current = null;
     }
+    if (browserCamOverlayCanvasRef.current) {
+      const ctx = browserCamOverlayCanvasRef.current.getContext('2d');
+      if (ctx) ctx.clearRect(0, 0, browserCamOverlayCanvasRef.current.width, browserCamOverlayCanvasRef.current.height);
+    }
     setIsBrowserCamActive(false);
   };
 
@@ -236,6 +353,17 @@ export const CCTV: React.FC = () => {
       stopBrowserCam();
     };
   }, []);
+
+  // Continuous YOLO11 canvas redraw when telemetry updates
+  useEffect(() => {
+    if (isBrowserCamActive && browserCamVideoRef.current && browserCamOverlayCanvasRef.current) {
+      drawDetectionsOverlay(
+        telemetry.detections || [],
+        browserCamVideoRef.current,
+        browserCamOverlayCanvasRef.current
+      );
+    }
+  }, [telemetry, isBrowserCamActive, drawDetectionsOverlay]);
 
   // Test Connection Action
   const handleTestConnection = async () => {
@@ -1033,6 +1161,29 @@ export const CCTV: React.FC = () => {
 
 
             <div className="flex items-center gap-2">
+              {/* In-Browser Webcam Quick Toggle */}
+              {isBrowserCamActive ? (
+                <button
+                  type="button"
+                  onClick={stopBrowserCam}
+                  className="px-3 py-1.5 rounded-xl text-[11px] font-bold bg-rose-600 hover:bg-rose-500 text-white flex items-center gap-1.5 shadow-md shadow-rose-900/40 transition animate-pulse"
+                  title="Stop in-browser camera and return to CCTV stream"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>⏹️ Stop In-Browser Cam</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={startBrowserCam}
+                  className="px-3 py-1.5 rounded-xl text-[11px] font-bold bg-emerald-600/90 hover:bg-emerald-500 text-white flex items-center gap-1.5 border border-emerald-500/40 shadow-md shadow-emerald-900/30 transition"
+                  title="Activate in-browser webcam with real-time YOLO11 object detection"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>🎥 In-Browser Cam (YOLO11)</span>
+                </button>
+              )}
+
               {/* Mirror Reflection Mode Toggle Button */}
               <button
                 type="button"
@@ -1098,19 +1249,30 @@ export const CCTV: React.FC = () => {
                 : ''
             }`}
           >
-            {/* If In-Browser Camera is Active, display the live local camera video directly */}
+            {/* If In-Browser Camera is Active, display the live local camera video with YOLO11 AI Canvas Overlay */}
             {isBrowserCamActive ? (
-              <video
-                ref={browserCamVideoRef}
-                autoPlay
-                playsInline
-                muted
-                className={`w-full h-full max-h-[460px] object-contain transition-transform ${
-                  isMirrored ? '-scale-x-100' : ''
-                } ${
-                  zoomLevel === 2 ? 'scale-125' : zoomLevel === 3 ? 'scale-150' : ''
-                }`}
-              />
+              <div className="relative w-full h-full flex items-center justify-center overflow-hidden">
+                <video
+                  ref={browserCamVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className={`w-full h-full max-h-[460px] object-contain transition-transform ${
+                    isMirrored ? '-scale-x-100' : ''
+                  } ${
+                    zoomLevel === 2 ? 'scale-125' : zoomLevel === 3 ? 'scale-150' : ''
+                  }`}
+                />
+                {/* Real-time YOLO11 AI Detection Overlay Canvas */}
+                <canvas
+                  ref={browserCamOverlayCanvasRef}
+                  className={`absolute inset-0 w-full h-full pointer-events-none ${
+                    isMirrored ? '-scale-x-100' : ''
+                  } ${
+                    zoomLevel === 2 ? 'scale-125' : zoomLevel === 3 ? 'scale-150' : ''
+                  }`}
+                />
+              </div>
             ) : (
               /* Real-Time MJPEG Stream with YOLO11 Bounding Boxes */
               <img

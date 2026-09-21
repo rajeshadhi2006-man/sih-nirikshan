@@ -22,9 +22,13 @@ export const getApiBaseUrl = (): string => {
       host.startsWith('192.168.') ||
       host.startsWith('10.') ||
       host.startsWith('172.') ||
-      host.endsWith('.local');
+      host.endsWith('.local') ||
+      host.includes('trycloudflare.com');
 
     if (isLocal) {
+      if (host.includes('trycloudflare.com')) {
+        return window.location.origin;
+      }
       return `http://${host === 'localhost' ? 'localhost' : host}:8000`;
     }
   }

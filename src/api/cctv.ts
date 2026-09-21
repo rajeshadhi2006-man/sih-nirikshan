@@ -273,11 +273,11 @@ export async function stopCCTVSession(cameraId: string, sessionId?: string): Pro
 
 export async function uploadCCTVFrame(payload: CCTVFrameData) {
   try {
-    await axios.post(`${API_BASE_URL}/api/cctv/frame`, payload);
-    return true;
+    const res = await axios.post(`${API_BASE_URL}/api/cctv/frame`, payload);
+    return res.data?.data || null;
   } catch (e) {
     console.warn('CCTV frame upload fallback error:', e);
-    return false;
+    return null;
   }
 }
 
